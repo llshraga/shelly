@@ -1,8 +1,14 @@
 // WARNING :
 //  This script currently assumes you have another script present on the same
-//  device and that script has ID : 1. Will be fixed later. 
+//  device and that script has ID : 2. Will be fixed later. 
 //  That script will be used as the logger pad for persistent storage
 //  I find it usefull to name that script "log" and mark it as NOT enabled, of course
+
+// Each 10 minutes the script will start a session of 5 internet (and wifi) checks - each 10 secs apart
+// if all 5 checks failed - the script will reboot Shelly
+// PRO TIP : I have another script which is "enabled" (i.e - runs on boot) and sends me a Telegram message 
+// that says Shelly was reboot 
+
 
 // CONFIG START
 // a remote URL with just a few bytes of content in order to check if internet is still available.
