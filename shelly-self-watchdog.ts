@@ -1,33 +1,47 @@
-// WARNING :
-//  This script currently assumes you have another script present on the same
-//  device and that script has ID : 2. Will be fixed later. 
-//  That script will be used as the logger pad for persistent storage
-//  I find it usefull to name that script "log" and mark it as NOT enabled, of course
-
-// Each 10 minutes the script will start a session of 5 internet (and wifi) checks - each 10 secs apart
-// if all 5 checks failed - the script will reboot Shelly
-// PRO TIP : I have another script which is "enabled" (i.e - runs on boot) and sends me a Telegram message 
-// that says Shelly was reboot 
-
-
-// CONFIG START
 // a remote URL with just a few bytes of content in order to check if internet is still available.
-let remoteurl = 'https://gist.githubusercontent12.com/eurich/6e84e85c11401c4e28a2676492d846b7/raw/5d577bc2dfadfa13887f9b2ec146fe1b2ee2f5b6/gistfile1.txt';
+let remoteurl = 'https://gist.githubusercontent.com/eurich/6e84e85c11401c4e28a2676492d846b7/raw/5d577bc2dfadfa13887f9b2ec146fe1b2ee2f5b6/gistfile1.txt';
+
 // number of times the check is done before internet is considered as down.
 let maxfails = 5;
+
 // checks the internet connection every x minutes, recommended is 5 or more
-let interval = 5;
+let interval_secs = 10;
 
+// critical section
 let is_check_on_going = false;
-
-// CONFIG END
-
 
 // no need to change anything below this line.
 let alertTimer = '';
+let mainTimer = '';
 let failcounter = 0;
-function startMonitor() {
-    alertTimer = Timer.set(interval *2 * 1000,
+let currentTime = '';
+let firstTime = true;
+let logScritID = 100;
+let telegramRegainConnecionScriptID = 100;
+
+function sendRegainTelegram()
+{
+    
+  Shelly.call("Script.Stop", 
+                    {
+                        id: telegramRegainConnecionScriptID,
+                     },
+                      function (res, error_code, error_msg, ud) {
+                          Shelly.call("Script.Start", 
+                                      {
+                                        id: "4",
+                                       },
+                                       function (res, error_code, error_msg, ud) {},
+                                       null
+                                       );
+                        },
+                    null
+                );
+}
+function doMonitor()
+{
+    addToLog("Starting session");
+    alertTimer = Timer.set(interval_secs * 1000,
         true,
         function () {
             // Simple critical section to make sure this timer is not faster
@@ -39,17 +53,36 @@ function startMonitor() {
         }
         null
     );
+
+}
+
+function startMonitor() {
+   
+     Shelly.call("Sys.GetStatus", {},
+                   function(res, error_code, error_msg, ud)
+                   {
+                     currentTime = res.time;
+                     print(currentTime); 
+                     if (firstTime===true)
+                     {
+                       addToLog("Boot up");
+                       firstTime = false;
+                     }
+                     doMonitor();
+                   },
+                   null,
+                   );
 }
 
 
 function addToLog(message)
 {
-    print(message);
+   print(message);
    Shelly.call("Script.PutCode", 
                   {
-                      id: "2",
+                      id: logScritID,
                       append:true,
-                      code:message + "\n\r"
+                      code: currentTime + ":" + message + "\n"
                    },
                     function (res, error_code, error_msg, ud) {
                         
@@ -62,7 +95,6 @@ function checkInternetandWifiOK()
 {
     // Get the critical section to prevent two inqueres in parallel
    is_check_on_going = true;
-        
     Shelly.call("HTTP.GET", 
                 {
                     url: remoteurl,         
@@ -77,13 +109,20 @@ function checkInternetandWifiOK()
                       }
                       else
                       {
+                          print("Connected. Stopping checks for 5 minutes");
+                          is_check_on_going = false;
+                          Timer.clear(alertTimer);
                           // if we had some failures but now we got a connection
                           // reset the failures counter so we dont reboot too often
                           if (failcounter > 0 )
                           {
                                addToLog("Connected !");
+                               // Connection was lost and regain before we decided to reboot - notify the owner - me :)
+                               sendRegainTelegram();
+                              
                                failcounter = 0;
                           }
+                          
                       }
                     
                     },
@@ -97,6 +136,7 @@ function checkWifiOK()
               null,
               function (res, error_code, error_msg, ud) 
               {
+               
                  if ((res.status === "disconnected") || (res.status === "connecting"))
                  {
                     addToLog("WIFI not connected");
@@ -117,6 +157,9 @@ function checkWifiOK()
           );
 }
 function restartRelay() {
+    // Self- reboot
+    // Note : currently I have another script which is enabled to run on Boot and that scripts sends me a Telegram note about 
+    // Shelly coming up of boot
     Shelly.call(
         "Shelly.Reboot",
         null,
@@ -125,4 +168,50 @@ function restartRelay() {
         null
     );
 }
-startMonitor();
+
+function kickMonitor() {
+    // Start 10 minutes timer - each 10 minutes we will perform a series of network checks 
+    mainTimer = Timer.set(10 * 60 * 1000,
+        true,
+        function () {           
+              startMonitor();
+        }
+        null
+    );
+}
+
+function initAndRun()
+{
+    // First we are going to identify our utility scripts. There are two currently
+    // One should be name "logs" and we will use it as a pseudo-script to store persisten execution logs 
+    // since I did not find another way in the API to store persisten logs
+    // Second script is named TelegramRegainConnection - this one, when executed, will send me a Telegram message
+    // and it will be triggered if the connection was identified as lost and regained  before the shelly decided to self-reboot
+    
+    // Note : no error handling in the scripts identification part for now. I just assume they exist
+  Shelly.call("Script.List",{},
+              function (res, error_code, error_msg, ud) 
+              {
+                for (let i=0; i<res.length; i++) {
+                    if (res[i].name === "log")
+                    {
+                      print("Log script");
+                      logScritID = res[i].id;
+                      print(logScritID);
+                    }
+                    else if (res[i].name === "TelegramRegainConnection")
+                    {
+                      print("TelegramRegainConnection script");
+                      telegramRegainConnecionScriptID = res[i].id;
+                      print(telegramRegainConnecionScriptID);
+                    }
+               }
+      
+               // Scripts identification is done - start the main timer
+               kickMonitor();
+    
+              },null
+               );
+}
+
+initAndRun();
